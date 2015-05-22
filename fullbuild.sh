@@ -6,18 +6,17 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+INCLUDES=config/includes.chroot
+GUESTTOOLS=sdc-vmtools/src/linux
 
-if [[ ! -d sdc-vmtools ]] ; then
-  echo "sdc-vmtools  not found!"
-  exit 1
-fi
+echo "==> Copying Guest tools to ${INCLUDES}"
+echo "====> Initiallizing and fetching submodule sdc-vmtools"
+git submodule init
+git submodule update
 
-includes=config/includes.chroot
-sdcvmtools=sdc-vmtools/src/linux
-
-echo "Syncing etc, lib, and usr directories to ${includes}..."
+echo "Syncing etc, lib, and usr directories to ${INCLUDES}..."
 # Using rsync to ensure deleted files from sdc-vmtools repo are removed
-rsync -aq --delete --exclude=install-tools.sh ./${sdcvmtools}/ ${includes}/
+rsync -aq --delete --exclude=install-tools.sh ./${GUESTTOOLS}/ ${INCLUDES}/
 
 echo "==> Starting build!"
 
