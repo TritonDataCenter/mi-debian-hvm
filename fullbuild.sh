@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
+#
+# Copyright (c) 2015 Joyent Inc., All rights reserved.
+#
 
-set -e
+set -euo pipefail
+IFS=$'\n\t'
 
 
 if [[ ! -d sdc-vmtools ]] ; then
