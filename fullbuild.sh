@@ -19,7 +19,15 @@ echo "Syncing etc, lib, and usr directories to ${includes}..."
 # Using rsync to ensure deleted files from sdc-vmtools repo are removed
 rsync -aq --delete --exclude=install-tools.sh ./${sdcvmtools}/ ${includes}/
 
-echo "Starting full build..."
-echo ""
+echo "==> Starting build!"
 
-lb clean; lb config; lb build
+echo "==> Cleaning up..."
+lb clean
+
+echo "==> Configuring..."
+lb config
+
+echo "==> Building..."
+lb build
+
+exit 0
