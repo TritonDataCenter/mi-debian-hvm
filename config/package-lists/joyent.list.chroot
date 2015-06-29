@@ -1,8 +1,12 @@
 acpid
+bzip2
 curl
+htop
 less
+mlocate
 ntp
 openssh-server
 parted
+python
 vim
 wget
