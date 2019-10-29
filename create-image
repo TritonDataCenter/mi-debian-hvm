@@ -1,269 +1,382 @@
-#!/usr/bin/env bash
+#!/bin/bash
+
 #
-# Copyright (c) 2015 Joyent Inc., All rights reserved.
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+
+#
+# Copyright 2019 Joyent, Inc.
 #
 
 if [[ -n "$TRACE" ]]; then
-  export PS4='[\D{%FT%TZ}] ${BASH_SOURCE}:${LINENO}: ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
-  set -o xtrace
+	export PS4='[\D{%FT%TZ}] ${BASH_SOURCE}:${LINENO}: ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
+	set -o xtrace
+else
+	TRACE=
 fi
 
 set -euo pipefail
 IFS=$'\n\t'
 
-ISO=
-IMAGE_NAME=
-OWNER_UUID=
-DESC=
-HOMEPAGE=
+import_gpg_keys() {
+	local file
 
-IP=
-NETMASK=
-GATEWAY=
-VLAN_ID=
-NETWORK_UUID=
+	for file in $distrel/keys/*; do
+		if [[ -f $file ]]; then
+			found_key=true
+			echo "Importing gpg key from $file"
+			gpg --import $file
+		fi
+	done
+	if [[ $found_key == false ]]; then
+		echo "$0: Warning: no gpg key found in \
+		    keys/$distro_l-$release" 1>&2
+	fi
 
-BLANK_MANIFEST=blank.json
-BUILD_DATE=$(date +%Y%m%d)
+}
 
-VM_UUID=
+iso_file=
+iso_sha=
+iso_url=
+get_iso_file_sha() {
+	local file url
+	# "" is a sentinal value
+	local urls=("${ISO_URLS[@]}" "")
+
+	if [[ -n $iso_file ]]; then
+		return
+	fi
+
+	echo "Checking to see if we have the iso for $distro $release:"
+	for url in "${ISO_URLS[@]}"; do
+		for file in SHA256SUMS SHA256SUMS.sign; do
+			wget -nv -O "$iso_dir/$file" "$url/$file"
+		done
+		gpg --verify $iso_dir/SHA256SUMS.sign
+
+		# As new dot releases come out, the name of the iso file changes
+		# according to a predictable pattern.  The sha256sums.txt file
+		# contains the proper name.
+		eval $(awk -v pattern="$DVD_PATTERN" '$2 ~ pattern {
+			printf("iso_sha=%s; iso_file=%s;", $1, $2)
+			exit 0
+		    }' $iso_dir/SHA256SUMS)
+		if [[ -n $iso_file ]]; then
+			iso_url=$url
+			return
+		fi
+	done
+
+	echo "$0: unable to determine ISO file and/or sha256" 1>&2
+	exit 1
+}
+
+fetch_iso() {
+	local file sha out
+	local need_iso=false
+	local found_key=false
+
+	if [[ ! -d $iso_dir ]]; then
+		mkdir -p $iso_dir
+	fi
+
+	import_gpg_keys
+	get_iso_file_sha
+
+	echo "Checking integrity of $iso_file"
+	if [[ ! -f $iso_dir/$iso_file ]]; then
+		echo "No local copy of $iso_file. Fetching latest $iso_file"
+		need_iso=true
+	elif ! echo $iso_sha $iso_dir/$iso_file | sha256sum -c -; then
+		echo "Local copy of $iso_file is bad." \
+		    "Fetching latest $iso_file."
+		rm -f "$iso_dir/$iso_file"
+		need_iso=true
+	fi
+
+	if $need_iso; then
+		wget -nv -O "$iso_dir/$iso_file" "$iso_url/$iso_file"
+		echo "Checking integrity of $iso_dir/$iso_file"
+		echo "$iso_sha" "$iso_dir/$iso_file" | sha256sum -c -
+	fi
+}
+
+mount_iso() {
+	local file=$1
+	local mntpt=$2
+
+	# Check if $mntpt is already mounted
+	# This may happen if a previous build failed
+	if df -h "$mntpt" 2>/dev/null | grep -qw "$mntpt"; then
+		echo "Unmounting $mntpt from previous build..."
+		umount "$mntpt"
+	fi
+
+	echo "Mounting $file to $mntpt"
+	if [[ ! -d $mntpt ]]; then
+		echo "Creating $mntpt..."
+		mkdir -p "$mntpt"
+	fi
+	case $(uname -s) in
+		Linux)
+			mount "$file" "$mntpt" -o loop
+			;;
+		SunOS)
+			mount -F hsfs "$file" "$mntpt"
+			;;
+		*)
+			echo "$0: do not know how to mount an iso on" \
+			    "$(uname -s)". 1>&2
+			exit 2
+			;;
+	esac
+}
+
+create_iso_root() {
+	local src_mntpt=/tmp/mnt/$distrel
+
+	mount_iso "$iso_dir/$iso_file" "$src_mntpt"
+
+	echo "Creating ISO Layout"
+
+	if [[ -d $iso_root ]]; then
+		echo "Layout $iso_root exists...nuking"
+		rm -rf "$iso_root"
+	fi
+	echo "Creating $iso_root"
+	mkdir -p "$iso_root"
+
+	echo "Copying distribution ISO to $iso_root"
+	(cd "$src_mntpt" && find . | cpio -pd "$iso_root")
+
+	umount "$src_mntpt"
+}
+
+copy_guest_tools() {
+	echo "Copying $guesttools"
+	echo "Initiallizing and fetching submodule $guesttools"
+	git submodule update --init
+	cp -R ./$guesttools/ $iso_root/
+}
+
+create_iso() {
+	echo "Preparing installer ISO"
+	create_iso_root
+	copy_guest_tools
+
+	cp "$distrel/preseed.cfg" "$iso_root/preseed.cfg"
+	cp "$distrel/early-command" "$iso_root/early-command"
+	cp "$distrel/late-command" "$iso_root/late-command"
+
+	echo "Creating installer ISO"
+	local volume="$(isoinfo -d -i "$iso_file" | grep "^Volume id:" |
+	    sed 's/Volume id: //')"
+	# This ISO is not bootable.  Rather than futzing with the isolinux
+	# configuration, we just pass boot pargs via qemu.
+	mkisofs -r -R -J -T -v -V "$volume" -A "$volume" -o "$iso" "$iso_root"
+	echo "Installer ISO $iso is ready"
+}
+
+create_image() {
+	local desc
+	local media_mntpt=/tmp/mnt/$distrel-media
+	local qemu_args=()
+	local append=
+
+	get_iso_file_sha
+
+	append+=" net.ifnames=0 biosdevname=0"
+	append+=" priority=high file=/cdrom/preseed.cfg locale=en_US"
+	append+=" keymap=us"
+	qemu_args+=( "-kernel" "$iso_root/install.amd/vmlinuz" )
+	qemu_args+=( "-initrd" "$iso_root/install.amd/initrd.gz" )
+	qemu_args+=( "-append" "$append" )
+
+	desc="$distro $release 64-bit image with just essential packages "
+	desc+="installed. Built to run on bhyve or KVM virtual machines."
+
+	local stamp=$branch-${cur_time//[:-]}-$githash
+	$top/eng/tools/create-hybrid-image -i "$iso" \
+		-n "$distrel" -d "$desc" -p "$top/imgmanifest.in" \
+		-o "$top/bits/$distrel/$stamp" \
+		-u "https://docs.joyent.com/images/linux/$distro" \
+		-- "${qemu_args[@]}" 2>&1 | tee $distrel-qemu.log
+
+	# Verify that any JOYENT_STATUS_* items are all ok.  Ideally this would
+	# run before create-hybrid-image bothers with the zfs send.  Even though
+	# it is running a bit late here, it will prevent Jenkins from calling a
+	# build good
+	local have var val fail
+	fail=false
+	typeset -A have
+	for var in "${JOYENT_STATUS_VARS[@]}"; do
+		have["$var"]='<nothing>'
+	done
+	eval $(grep "^JOYENT_STATUS_" $distrel-qemu.log | awk -F= \
+	    '{gsub("\r", "", $2); printf("have['%s']='%s'\n", $1, $2)}')
+	for var in "${JOYENT_STATUS_VARS[@]}"; do
+		val=${have[$var]}
+		if [[ "$val" != 'ok' ]]; then
+			echo "Error: expected $var=ok, got $var=$val" 1>&2
+			fail=true
+		else
+			echo "Ok: got $var=$val"
+		fi
+		unset have["$var"]
+	done
+	for var in "${!have[@]}"; do
+		val=${have[$var]}
+		echo "Error: unexpected $var=$val" 1>&2
+		fail=true
+	done
+
+	if [[ $fail == true ]]; then
+		exit 1
+	fi
+
+	# All is well - let future invocations of upload_image know.
+	echo "$stamp" > $top/bits/$distrel-latest-build-stamp
+}
+
+upload_image() {
+	local bits=bits
+
+	if [[ ! -f $bits/$distrel-latest-build-stamp ]]; then
+		echo "Error: no latest build" 2>&1
+		exit 1
+	fi
+	local stamp=$(cat $bits/$distrel-latest-build-stamp)
+
+	local publish=
+	if [[ -f /root/opt/imgapi-cli/bin/updates-imgadm ]]; then
+		publish=-p
+	fi
+	$top/eng/tools/bits-upload.sh $publish -b "$branch" \
+	    -D "$bits/$distrel/$stamp" \
+	    -d "/public/builds/$distrel" \
+	    -n "$distrel" \
+	    -t "$stamp"
+
+	local manta_url=${MANTA_URL:-https://us-east.manta.joyent.com}
+	local manta_path=${MANTA_USER:-Joyent_Dev}/public/builds/$distrel
+	local file path
+	find $bits/$distrel/$stamp -name \*.zfs.gz -o -name \*.imgmanifest |
+		while read file; do
+			path="/$manta_path/$stamp/$(basename $file)"
+			echo "$path"
+			echo "$manta_url/$path"
+			echo ""
+		done > $distrel.artifacts-in-manta
+}
+
 
 usage() {
-cat <<EOF
-
-Create an kvm Debian image from a given ISO file.
-
+	cat <<EOF
 Usage:
-  $0 -i <ISO> -n <IMAGE_NAME> -d <DESC> -u <HOMEPAGE> -o <OWNER_UUID> -p <IP> -m <NETMASK> -g <GATEWAY> -v <VLAN_ID> -U <NETWORK_UUID>
+	$0 [options] [command ...]
+option:
+	-h	This message
+	-r	Debian release
+	-R	Full release (e.g. 10.1.0)
 
-Example:
-  $0 -i binary.iso -n debian-7 -d "Debian 7.6 (wheezy) 64-bit image with just essential packages installed. Ideal for users who are comfortable with setting up their own environment and tools." -u https://docs.joyent.com/images/kvm/debian -o 00000000-0000-0000-0000-000000000000 -p 192.0.2.21 -m <NETMASK> -g <GATEWAY> -v <VLAN_ID> -U <NETWORK_UUID>
+Commands:
+	fetch	Fetch the installation ISO
+	iso	Create a installer ISO
+	image	Generate the image
 
-OPTIONS:
-  -i The ISO
-  -n The name of the image as it would appear in the manifest
-  -d The description of the image
-  -u The homepage URL for the image
-  -o The onwer UUID for the blank VM
-  -p The IP address for the blank VM
-  -m The netmask for the blank VM
-  -g The gateway for the blank VM
-  -v The vlan ID for blank VM
-  -U The Network UUID for the blank vm
-  -h Show this message
-
+If no command is given, all commands are run in the appropriate order.
 EOF
 }
 
-while getopts "hi:n:d:u:o:p:m:g:v:U:" OPTION
-do
-  case $OPTION in
-    h)
-      usage
-      exit 1
-      ;;
-    i)
-      ISO=${OPTARG}
-      ;;
-    n)
-      IMAGE_NAME=${OPTARG}
-      ;;
-    d)
-      DESC=${OPTARG}
-      ;;
-    u)
-      HOMEPAGE=${OPTARG}
-      ;;
-    o)
-      OWNER_UUID=${OPTARG}
-      ;;
-    p)
-      IP=${OPTARG}
-      ;;
-    m)
-      NETMASK=${OPTARG}
-      ;;
-    g)
-      GATEWAY=${OPTARG}
-      ;;
-    v)
-      VLAN_ID=${OPTARG}
-      ;;
-    U)
-      NETWORK_UUID=${OPTARG}
-      ;;
-    ?)
-      usage
-      exit 1
-      ;;
-  esac
+typeset -l distro_l=debian
+distro=Debian
+release=
+
+while getopts :hr: opt; do
+	case "$opt" in
+	r)	release=$OPTARG
+		;;
+	h)
+		usage;
+		exit 0
+		;;
+	\?)
+		echo "$0: Invalid option $OPTARG" 1>&2
+		usage 1>&2
+		exit 1
+		;;
+	*)
+		echo "$0: BUG: unhandled option $opt" 1>&2
+		exit 2
+		;;
+	esac
 done
 
-if [[ -z ${ISO} || -z ${IMAGE_NAME} || -z ${DESC} || -z ${HOMEPAGE} \
-  || -z ${OWNER_UUID} || -z ${IP} || -z ${NETMASK} || -z ${VLAN_ID} \
-  || -z ${NETWORK_UUID} || -z ${GATEWAY} ]]; then
+shift $(( OPTIND - 1 ))
 
-  echo "FATAL: All of -i, -n, -d, -u, -o, -p, -m, -g, -v, and -U are required."
-  usage
-  exit 1
+if [[ -z $release ]]; then
+	echo "$0: must specify $distro release with -r" 1>&2
+	exit 1
 fi
 
-# The manifest for the blank VM, saved as blank.json
-cat << MANIFEST > $BLANK_MANIFEST
-{
-  "brand": "kvm",
-  "alias": "$IMAGE_NAME",
-  "hostname": "$IMAGE_NAME",
-  "autoboot": false,
-  "ram": 1024,
-  "vcpus": 2,
-  "cpu_type": "host",
-  "disk_driver": "virtio",
-  "nic_driver": "virtio",
-  "max_physical_memory": 2048,
-  "quota": 10,
-  "disks": [
-    {
-      "boot": true,
-      "model": "virtio",
-      "size": 10240
-    }
-  ],
-  "owner_uuid": "$OWNER_UUID",
-  "resolvers": [
-    "8.8.8.8",
-    "8.8.4.4"
-  ],
-  "nics": [
-    {
-      "interface": "net0",
-      "nic_tag": "external",
-      "ip": "$IP",
-      "primary": "true",
-      "netmask": "$NETMASK",
-      "gateway": "$GATEWAY",
-      "vlan_id": $VLAN_ID,
-      "model": "virtio",
-      "network_uuid": "$NETWORK_UUID"
-    }
-  ]
-}
-MANIFEST
+cur_time=$(date +%FT%TZ)
+top=$(cd "$(dirname $0)" && pwd -P)
+distrel=$distro_l-$release
+iso_root=$top/$distrel/root
+iso_dir=/data/mi-centos-hvm/fetched-iso/$distrel
+# The iso file generated by create_iso
+iso=$top/$distrel-joyent.iso
+guesttools=sdc-vmtools
 
-function check_for_blank {
-  echo  "==> Checking for existing blank "$IMAGE_NAME" VM."
-  set +e
-  blank=$(pfexec vmadm list | grep $IMAGE_NAME)
+branch=$(git describe --all | sed -e 's,^heads/,,' -e 's,/,_,g')
+githash="$(git log -n 1 --pretty=format:%h)"
 
-  if [[ $? -eq 0 ]]; then
-    echo "==> Blank VM "$IMAGE_NAME" found:"
-    echo "==> $blank"
-    echo -n "==> Deleting..."
-    blank_uuid=$(echo $blank  | cut -f1 -d ' ')
-    pfexec vmadm delete $blank_uuid
-    echo "done!"
-    echo "==> Sleeping for 5 seconds before we continue."
-    sleep 5
-  else
-    echo "No Blank VM "$IMAGE_NAME" found. It's safe to create a new one."
-  fi
-  set -e
-  echo "==>"
-}
+DVD_PATTERN=^$distro_l-$release\.[0-9]+\.[0-9]+-amd64-netinst\.iso$
+ISO_URLS=(
+    https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/
+    https://cdimage.debian.org/cdimage/archive/latest-oldstable/amd64/iso-cd/
+    https://cdimage.debian.org/cdimage/archive/latest-oldoldstable/amd64/iso-cd/
+)
+# Each of these are expected to be set to "ok" in output from guest
+JOYENT_STATUS_VARS=( JOYENT_STATUS_PRE JOYENT_STATUS_POST )
 
-function create_blank {
-  echo -n "==> Creating blank "$IMAGE_NAME" VM and getting VM_UUID..."
-  VM_UUID=$(pfexec vmadm create -f $BLANK_MANIFEST 2>&1 | awk '{print $4;}')
-  echo "done!"
-  echo "==> VM_UUID is ${VM_UUID}"
-  echo "==>"
-}
+fail=false
+for cmd in wget gpg mkisofs; do
+	if ! type -path $cmd >/dev/null; then
+		fail=true
+		echo "$0: command $cmd not found" 1>&2
+	fi
+done
 
-function copy_iso {
-  echo -n "==> Copying $ISO to /zones/${VM_UUID}/root/..."
-  pfexec cp $ISO /zones/${VM_UUID}/root/
-  echo "done!"
-  echo "==>"
-}
+if (( $(ps -o uid= -p $$) != 0 )); then
+	fail=true
+	echo "$0: must be root" 1>&2
+fi
+$fail && exit 1
 
-function start_blank {
-  echo "==> Starting ${VM_UUID} with cdrom=/$ISO:"
-  pfexec vmadm start ${VM_UUID} order=cd,once=d cdrom=/$ISO,ide
-  echo "==>"
-}
+if [[ -f $distrel/create-image-overrides.sh ]]; then
+	. $distrel/create-image-overrides.sh
+fi
 
-function get_VNC {
-  echo "==> Getting VNC info for ${VM_UUID}:"
-  host=$(pfexec vmadm info ${VM_UUID} vnc  2>&1 | json -a vnc.host)
-  port=$(pfexec vmadm info ${VM_UUID} vnc  2>&1 | json -a vnc.port)
-  echo "==> Host: $host"
-  echo "==> Port: $port"
-  echo "==>"
-}
+if (( $# == 0 )); then
+	set -- fetch iso image
+fi
 
-function check_state {
-  echo -n "==> Checking state of '$IMAGE_NAME' VM to ensure it's stopped before we proceed..."
-  STATE="running"
-    while [[ $STATE != "stopped" ]]; do
-      STATE=$(pfexec vmadm get ${VM_UUID} | json -a state)
-      echo -n "."
-      sleep 1
-    done
-  echo "ready!"
-  echo "==> The '$IMAGE_NAME' VM is stopped. Sleping for 15 seconds before we continue."
-  sleep 15
-  echo "==>"
-}
-
-function snapshot {
-  echo "==> Creating snapshot..."
-  zfs snapshot zones/${VM_UUID}-disk0@dataset-${BUILD_DATE}
-  echo "==> done!"
-  echo "==>"
-}
-
-function create_file {
-  echo "==> Creating image file..."
-  zfs send zones/${VM_UUID}-disk0@dataset-${BUILD_DATE} | gzip -9 > ${IMAGE_NAME}-${BUILD_DATE}.zfs.gz
-  echo "==> done!"
-  echo "==>"
-}
-
-function create_manifest {
-  echo "==> Creating manifest file..."
-  ./sdc-vmmanifest -f ${IMAGE_NAME}-${BUILD_DATE}.zfs.gz -n ${IMAGE_NAME} -s 10240 -v ${BUILD_DATE} -d "$DESC" -h $HOMEPAGE -o linux > ${IMAGE_NAME}-${BUILD_DATE}.json
-  echo "==> done!"
-  echo "==>"
-}
-
-function show_image_files {
-  echo "*** Image creation complete ***"
-  echo "==> Image files:"
-  echo "$(ls | grep $BUILD_DATE)"
-  echo ""
-}
-
-function clean_up {
-  rm -rf blank.json
-  echo "==> Deleting blank $IMAGE_NAME VM: ${VM_UUID}"
-  pfexec vmadm delete ${VM_UUID}
-}
-
-
-# MAIN
-
-echo "*** Starting image creation process! ***"
-
-check_for_blank
-create_blank
-copy_iso
-start_blank
-get_VNC
-check_state
-snapshot
-create_file
-create_manifest
-show_image_files
-clean_up
-
-exit 0
+for arg in "$@"; do
+	case $arg in
+	fetch)
+		fetch_iso
+		;;
+	iso)
+		create_iso
+		;;
+	image)
+		create_image
+		;;
+	upload)
+		upload_image
+		;;
+	esac
+done

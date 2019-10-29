@@ -1,0 +1,37 @@
+{
+  "v": "2",
+  "name": "@NAME@",
+  "version": "@DATE@",
+  "type": "zvol",
+  "cpu_type": "host",
+  "description": "@DESC@",
+  "homepage": "https://docs.joyent.com/images/linux/CentOS",
+  "published_at": "@TIME_NOW@",
+  "os": "linux",
+  "image_size": @ZVOL_SIZE@,
+  "files": [
+    {
+      "sha1": "@IMAGE_SHA@",
+      "size": @GZIP_SIZE@,
+      "compression": "gzip"
+    }
+  ],
+  "requirements": {
+    "networks": [
+      {
+        "name": "net0",
+        "description": "public"
+      }
+    ],
+    "ssh_key": true
+  },
+  "disk_driver": "virtio",
+  "nic_driver": "virtio",
+  "uuid": "@IMAGE_UUID@",
+  "public": false,
+  "owner": "00000000-0000-0000-0000-000000000000",
+  "users": [{"name": "root"}],
+  "tags": {
+    "role": "os"
+  }
+}
