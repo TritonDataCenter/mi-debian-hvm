@@ -5,7 +5,7 @@
   "type": "zvol",
   "cpu_type": "host",
   "description": "@DESC@",
-  "homepage": "https://docs.joyent.com/images/linux/CentOS",
+  "homepage": "https://docs.joyent.com/images/linux/Debian",
   "published_at": "@TIME_NOW@",
   "os": "linux",
   "image_size": @ZVOL_SIZE@,

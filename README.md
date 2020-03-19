@@ -11,6 +11,8 @@
 # Debian Image Builder
 
 This repo allows one to create custom Debian images for use with Triton.
+Other [repositories](https://github.com/joyent?q=mi--hvm) provide equivalent
+functionality for other distribution types.
 
 ## Requirements
 
@@ -18,7 +20,7 @@ In order to use this repo, you need to have a SmartOS "joyent" brand zone that
 is capable of running qemu.  In order to run qemu the instance needs
 customization beyond what can be done with Triton APIs.  That is, an operator
 needs to customize the instance.  This is typically accomplished by running the
-following commands on the apprporiate compute node:
+following commands on the appropriate compute node:
 
 ```
 uuid=XXX	# Change this to the instance uuid
@@ -98,7 +100,7 @@ Generate an installer ISO image.  This will contain the following:
   `debian-<release>/late-command`
 
 This image is automatically mounted when the debian installer needs it, but is
-not automtically mounted in the chroot (`/target`) while `late-command` is
+not automatically mounted in the chroot (`/target`) while `late-command` is
 running.  For that reason, each release's late command needs to mount it at
 `/target/cdrom` prior to running `late-command`.
 
@@ -110,7 +112,7 @@ described above.  Once qemu exits, a Triton-compatible
 image is generated and stored in the current `bits/<stamp>` directory as
 `debian-<release>-<timestamp>.{json,tar.gz}`.
 
-The actual image creation is handled by `sdc-vmutils/bin/create-hybrid-iamge`.
+The actual image creation is handled by `sdc-vmutils/bin/create-hybrid-image`.
 
 
 ### upload
@@ -123,7 +125,7 @@ to upload the image to manta and updates.joyent.com.
 ## Default Settings For Images
 
 Each image has the following characteristics.  See
-`debian-<release>/ks.cfg` for details on which packages are included.
+`debian-<release>/preseed.cfg` for details on which packages are included.
 
 * Disk is 10GB in size (8GB for / and the rest for swap)
 * Stock Kernel
@@ -136,7 +138,7 @@ Each image has the following characteristics.  See
 
 ## Development
 
-The following serves as a guide for adding support for new RHEL-like
+The following serves as a guide for adding support for new Debian-like
 distributions and versions of existing distributions.
 
 Distribution-specific content is found in a per-distro subdirectory.  For
@@ -160,8 +162,8 @@ file.  Notable parts of this include:
   datasource, among other things.
 * A `preseed/early\_command` (`debian-<release>/early-command`) is used to tail
   the installation log and write it to `/dev/ttyS0`.  This script is run under
-  busybox, so avoid use of anything too fancy.  `qemu` runs in such a way that
-  the guest's `ttyS0` appears on `qemu`'s `stdout`, thus allowing the
+  busybox, so avoid the use of anything too fancy.  `qemu` runs in such a way
+  that the guest's `ttyS0` appears on `qemu`'s `stdout`, thus allowing the
   installation log to be captured by Jenkins or similar automation that may be
   creating an image.
 * A `preseed/late\_command` (`debian-<release>/late-command`) runs at the end of

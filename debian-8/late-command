@@ -139,7 +139,7 @@ sed -i '2s/.*joyent.com.*//g' /etc/hosts
 echo "Setting vm.dirty_background_bytes"
 echo "vm.dirty_background_bytes=100000000" >> /etc/sysctl.conf
 
-# Disable password auth. SSH logon is via ssh key only. A password is being set
+# Disable password auth. SSH login is via ssh key only. A password is being set
 # for root via the image manifest per IMAGE-459.
 echo "Disabling password auth in sshd_config"
 sed s/PasswordAuthentication\ yes/PasswordAuthentication\ no/ -i /etc/ssh/sshd_config
