@@ -1,0 +1,142 @@
+#! /bin/bash
+
+#
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright 2020 Joyent, Inc.
+#
+
+# This is invoked in pressed.cfg via:
+# late_command string in-target /cdrom/late-command
+
+joyent_status=fail
+trap '(echo ""; echo JOYENT_STATUS_POST=$joyent_status; echo "") >>/dev/ttyS0' EXIT
+
+PS4='[\D{%FT%TZ}] ${BASH_SOURCE}:${LINENO}: ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
+set -euo pipefail xtrace
+
+# Install sdc-vmtools guest tools
+echo "Installing SmartOS VM Guest Tools..."
+sdcvmtools="/cdrom/sdc-vmtools/src/linux"
+cp -r ${sdcvmtools}/lib/smartdc /lib/
+cp -r ${sdcvmtools}/usr/sbin/mdata-* /usr/sbin/
+cp -r ${sdcvmtools}/usr/share/man/man1/mdata-* /usr/share/man/man1/
+ln -s /usr/sbin/mdata-get /lib/smartdc/mdata-get
+echo "SmartOS VM Guest Tools installed"
+
+# Remove root password
+echo "Removing root password"
+passwd -d root
+
+## Build date used for motd and product file
+release=$(cat /etc/debian_version)
+if [[ -z "$release" ]]; then
+        echo "$0: failed to determine release" 1>&2
+        exit 1
+fi
+BUILDDATE=$(date +%Y%m%d)
+NAME="Debian $release"
+DOCS="https://docs.joyent.com/images/linux/debian"
+
+# Create MOTD
+echo "Creating /etc/motd"
+mv /etc/motd /etc/motd-backup
+cat << MOTD > /etc/motd
+   __        .                   .
+ _|  |_      | .-. .  . .-. :--. |-
+|_    _|     ;|   ||  |(.-' |  | |
+  |__|   \`--'  \`-' \`;-| \`-' '  ' \`-'
+                   /  ;  Instance ($NAME $BUILDDATE)
+                   \`-'   $DOCS
+
+MOTD
+
+# MOTD symlinks
+echo "Creating /etc/motd symlinks"
+ln -sf /etc/motd /etc/issue
+ln -sf /etc/motd /etc/issue.net
+
+echo "Creating /etc/product file"
+cat << PRODUCT > /etc/product
+Name: Joyent Instance
+Image: $NAME $BUILDDATE
+Documentation: $DOCS
+Description: $NAME 64-bit image with just essential packages installed. Ideal for users who are comfortable with setting up their own environment and tools.
+PRODUCT
+
+echo "Installing new GRUB file"
+cat <<EOF > /etc/default/grub.d/50-joyent.cfg
+GRUB_TIMEOUT=5
+GRUB_DISABLE_SUBMENU=true
+GRUB_TERMINAL="serial console"
+GRUB_SERIAL_COMMAND="serial --speed=115200 --unit=0 --word=8 --parity=no --stop=1"
+GRUB_CMDLINE_LINUX="tsc=reliable divider=10 plymouth.enable=0 console=ttyS0 crashkernel=auto"
+GRUB_DISABLE_RECOVERY="true"
+EOF
+update-grub
+
+echo "Configuring cloud-init"
+cat <<EOF > /etc/cloud/cloud.cfg.d/90_smartos.cfg
+datasource_list: [ SmartOS ]
+
+# Preserve traditional root@<ip> login that was possible with rc.local
+disable_root: false
+
+# Do not create the centos/ubuntu/debian user
+users: [ ]
+
+mounts:
+- [ vdb, /data, auto, "defaults,nofail" ]
+
+# Make this instance's hostname resolvable
+manage_etc_hosts: localhost
+
+# cloud-init defaults to en_US.UTF-8, which comes by way of 100+ MB locales-all
+# package.
+locale: C.UTF-8
+EOF
+
+# Clean up all apt caches
+echo "Cleaning up apt caches"
+apt-get -y autoremove
+apt-get -y clean
+rm -rf /var/lib/apt/lists/*
+rm -rf /var/cache/*
+
+# Clean up network devices
+echo "Cleaning up network devices"
+rm -f /etc/udev/rules.d/70-persistent-net.rules
+rm -f /etc/network/interfaces.d/*
+/bin/rm -f /etc/resolv.conf
+ln -s /etc/resolvconf/run/resolv.conf /etc/resolv.conf
+cat > /etc/network/interfaces <<EOF
+# This file describes the network interfaces available on your system
+# and how to activate them. For more information, see interfaces(5).
+
+source /etc/network/interfaces.d/*
+EOF
+
+# Remove hostname
+echo "Clearing out /etc/hostname and /etc/hosts"
+cat /dev/null > /etc/hostname
+sed -i '2s/.*joyent.com.*//g' /etc/hosts
+
+# Tune Linux vm.dirty_background_bytes (IMAGE-439)
+# The following tuning causes dirty data to begin to be background flushed at
+# 100 Mbytes, so that it writes earlier and more often to avoid a large build
+# up and improving overall throughput.
+echo "Setting vm.dirty_background_bytes"
+echo "vm.dirty_background_bytes=100000000" >> /etc/sysctl.conf
+
+# Disable password auth. SSH login is via ssh key only. A password is being set
+# for root via the image manifest per IMAGE-459.
+echo "Disabling password auth in sshd_config"
+sed s/PasswordAuthentication\ yes/PasswordAuthentication\ no/ -i /etc/ssh/sshd_config
+
+find /etc/ssh -type f -name "ssh_host_*" -exec rm -f '{}' +
+
+set +x
+joyent_status=ok
+exit 0

@@ -1,0 +1,83 @@
+#! /bin/bash
+
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright 2020 Joyent, Inc.
+
+set -e
+
+manifest=$1
+brand=$2
+
+if [[ $brand != bhyve && $brand != kvm ]]; then
+	cat <<EOF 1>&2
+Usage:
+	$0 manifest <bhyve|kvm>
+
+./id_rsa.pub will be used for the root account. If it does not exist, a new
+key pair will be generated.
+EOF
+
+	exit 1
+fi
+
+file=${manifest%.imgmanifest}.zfs.gz
+distver=$(echo $manifest | cut -d- -f1-2)
+stamp=$(echo $manifest | cut -d- -f3 | cut -d. -f1)
+image_uuid=$(cat $manifest | json uuid)
+ssh_pubkey=
+if [[ ! -f id_rsa.pub ]]; then
+	ssh-keygen -t rsa -P "" -C "image-test@$(basename $0)" -f id_rsa
+fi
+ssh_pubkey=$(cat id_rsa.pub)
+
+if ! imgadm get $image_uuid >/dev/null 2>&1; then
+	imgadm install -m "$manifest" -f "$file"
+fi
+
+vmadm destroy bdebac29-7197-e1df-c25d-b387f4ca041b || true
+
+vmadm create <<EOF
+{
+  "uuid": "bdebac29-7197-e1df-c25d-b387f4ca041b",
+  "autoboot": false,
+  "alias": "$distver-$stamp",
+  "hostname": "$distver-$stamp",
+  "brand": "$brand",
+  "resolvers": [
+    "1.1.1.1",
+    "8.8.8.8",
+    "8.8.4.4"
+  ],
+  "ram": "1024",
+  "vcpus": "2",
+  "nics": [
+    {
+      "nic_tag": "admin",
+      "ips": ["10.88.88.217/24"],
+      "gateways": ["10.88.88.2"],
+      "model": "virtio",
+      "primary": true
+    }
+  ],
+  "disks": [
+    {
+      "image_uuid": "$image_uuid",
+      "boot": true,
+      "model": "virtio"
+    },
+    {
+      "size": 512,
+      "model": "virtio"
+    }
+  ],
+  "customer_metadata": {
+    "root_authorized_keys": "$ssh_pubkey"
+  }
+}
+EOF
+
+vmadm start bdebac29-7197-e1df-c25d-b387f4ca041b
+vmadm console bdebac29-7197-e1df-c25d-b387f4ca041b
