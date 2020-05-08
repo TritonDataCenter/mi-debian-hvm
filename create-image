@@ -250,7 +250,7 @@ upload_image() {
 	local stamp=$(cat $bits/$distrel-latest-build-stamp)
 
 	local publish=
-	if [[ -f /root/opt/imgapi-cli/bin/updates-imgadm ]]; then
+	if [[ -f /root/opt/imgapi-cli/bin/joyent-imgadm ]]; then
 		publish=-p
 	fi
 	$top/eng/tools/bits-upload.sh $publish -b "$branch" \
