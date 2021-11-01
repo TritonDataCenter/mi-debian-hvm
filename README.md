@@ -34,7 +34,7 @@ set name=$topds
 end
 add fs
 set dir=/smartdc
-set special=/smartds
+set special=/smartdc
 set type=lofs
 set options=ro
 end
