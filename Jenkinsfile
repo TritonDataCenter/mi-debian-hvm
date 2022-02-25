@@ -1,4 +1,4 @@
-@Library('jenkins-joylib@v1.0.1') _
+@Library('jenkins-joylib@v1.0.8') _
 
 pipeline {
     agent {
@@ -36,7 +36,7 @@ pipeline {
     post {
         always {
             archiveArtifacts artifacts: '*.artifacts-in-manta'
-            joyMattermostNotification()
+            joySlackNotifications()
         }
     }
 }
