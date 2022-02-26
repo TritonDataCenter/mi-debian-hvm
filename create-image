@@ -343,7 +343,7 @@ ISO_URLS=(
 JOYENT_STATUS_VARS=( JOYENT_STATUS_PRE JOYENT_STATUS_POST )
 
 fail=false
-for cmd in curl gpg cdrtools; do
+for cmd in curl gpg mkisofs; do
 	if ! type -path $cmd >/dev/null; then
 		fail=true
 		echo "$0: command $cmd not found" 1>&2
