@@ -10,7 +10,7 @@ pipeline {
         timestamps()
     }
 
-
+    stages {
         stage('debian-9') {
             steps {
                 sh('./create-image -r 9')
