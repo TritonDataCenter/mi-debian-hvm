@@ -10,13 +10,6 @@ pipeline {
         timestamps()
     }
 
-    stages {
-        stage('debian-8') {
-            steps {
-                sh('./create-image -r 8')
-                sh('./create-image -r 8 upload')
-            }
-        }
 
         stage('debian-9') {
             steps {
