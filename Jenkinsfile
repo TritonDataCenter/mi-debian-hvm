@@ -31,6 +31,14 @@ pipeline {
                 sh('./create-image -r 10 upload')
             }
         }
+
+        stage('debian-11') {
+            steps {
+                sh('./create-image -r 11')
+                sh('./create-image -r 11 upload')
+            }
+        }
+
     }
 
     post {
