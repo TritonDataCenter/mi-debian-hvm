@@ -342,6 +342,11 @@ ISO_URLS=(
 # Each of these are expected to be set to "ok" in output from guest
 JOYENT_STATUS_VARS=( JOYENT_STATUS_PRE JOYENT_STATUS_POST )
 
+# Ensure cdrtools is installed
+for pkg in cdrtools; do
+	pkg_info -e $pkg || pkgin -y install $pkg
+done
+
 fail=false
 for cmd in curl gpg mkisofs; do
 	if ! type -path $cmd >/dev/null; then
