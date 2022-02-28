@@ -52,7 +52,7 @@ get_iso_file_sha() {
 	echo "Checking to see if we have the iso for $distro $release:"
 	for url in "${ISO_URLS[@]}"; do
 		for file in SHA256SUMS SHA256SUMS.sign; do
-			wget -nv -O "$iso_dir/$file" "$url/$file"
+			curl -Lso "$iso_dir/$file" "$url/$file"
 		done
 		gpg --verify $iso_dir/SHA256SUMS.sign
 
@@ -97,7 +97,7 @@ fetch_iso() {
 	fi
 
 	if $need_iso; then
-		wget -nv -O "$iso_dir/$iso_file" "$iso_url/$iso_file"
+		curl -L# -o "$iso_dir/$iso_file" "$iso_url/$iso_file"
 		echo "Checking integrity of $iso_dir/$iso_file"
 		echo "$iso_sha" "$iso_dir/$iso_file" | sha256sum -c -
 	fi
@@ -342,8 +342,13 @@ ISO_URLS=(
 # Each of these are expected to be set to "ok" in output from guest
 JOYENT_STATUS_VARS=( JOYENT_STATUS_PRE JOYENT_STATUS_POST )
 
+# Ensure cdrtools is installed
+for pkg in cdrtools; do
+	pkg_info -e $pkg || pkgin -y install $pkg
+done
+
 fail=false
-for cmd in wget gpg mkisofs; do
+for cmd in curl gpg mkisofs; do
 	if ! type -path $cmd >/dev/null; then
 		fail=true
 		echo "$0: command $cmd not found" 1>&2

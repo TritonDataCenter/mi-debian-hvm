@@ -1,4 +1,4 @@
-@Library('jenkins-joylib@v1.0.1') _
+@Library('jenkins-joylib@v1.0.8') _
 
 pipeline {
     agent {
@@ -11,13 +11,6 @@ pipeline {
     }
 
     stages {
-        stage('debian-8') {
-            steps {
-                sh('./create-image -r 8')
-                sh('./create-image -r 8 upload')
-            }
-        }
-
         stage('debian-9') {
             steps {
                 sh('./create-image -r 9')
@@ -31,12 +24,20 @@ pipeline {
                 sh('./create-image -r 10 upload')
             }
         }
+
+        stage('debian-11') {
+            steps {
+                sh('./create-image -r 11')
+                sh('./create-image -r 11 upload')
+            }
+        }
+
     }
 
     post {
         always {
             archiveArtifacts artifacts: '*.artifacts-in-manta'
-            joyMattermostNotification()
+            joySlackNotifications()
         }
     }
 }
